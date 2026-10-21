@@ -1,4 +1,4 @@
-"""Hyprland wlr-layer-shell (bottom layer) desktop sticky Post-it widget with mouse dragging & checklists."""
+"""Hyprland wlr-layer-shell (bottom layer) desktop sticky Post-it widget with 40fps mouse dragging & checklists."""
 
 from __future__ import annotations
 
@@ -8,9 +8,7 @@ import shutil
 import socket
 import subprocess
 import sys
-import time
 from pathlib import Path
-from typing import Any
 
 from rich.text import Text
 from textual import events
@@ -81,7 +79,7 @@ def move_or_resize_panel(
     payload = b"\x1bP@kitty-cmd" + json.dumps(cmd).encode("utf-8") + b"\x1b\\"
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
-            s.settimeout(0.15)
+            s.settimeout(0.08)
             s.connect(str(sock_path))
             s.sendall(payload)
         return True
@@ -90,7 +88,25 @@ def move_or_resize_panel(
 
 
 def get_hypr_cursor_pos() -> tuple[int, int] | None:
-    """Returns global (x, y) cursor position from Hyprland."""
+    """Returns global (x, y) cursor position from Hyprland via sub-millisecond UNIX socket."""
+    sig = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE")
+    runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+    if sig:
+        for base in (f"{runtime}/hypr/{sig}", f"/tmp/hypr/{sig}"):
+            sock_file = f"{base}/.socket.sock"
+            if os.path.exists(sock_file):
+                try:
+                    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                        s.settimeout(0.05)
+                        s.connect(sock_file)
+                        s.sendall(b"cursorpos")
+                        raw = s.recv(64).decode("utf-8").strip()
+                    if "," in raw:
+                        parts = raw.split(",")
+                        return int(parts[0].strip()), int(parts[1].strip())
+                except Exception:
+                    pass
+
     hyprctl = shutil.which("hyprctl")
     if not hyprctl:
         return None
@@ -121,7 +137,7 @@ def spawn_sticky_process(note: PostItNote) -> bool:
     if not Path(cli_bin).exists():
         cli_bin = sys.argv[0]
 
-    cmd = [
+    kitty_cmd = [
         kitty_bin,
         "+kitten",
         "panel",
@@ -146,6 +162,19 @@ def spawn_sticky_process(note: PostItNote) -> bool:
         "sticky",
         note.id,
     ]
+
+    systemd_run = shutil.which("systemd-run")
+    if systemd_run:
+        cmd = [
+            systemd_run,
+            "--user",
+            "--collect",
+            f"--unit=postit-desktop-{note.id}",
+            *kitty_cmd,
+        ]
+    else:
+        cmd = kitty_cmd
+
     try:
         subprocess.Popen(
             cmd,
@@ -159,6 +188,11 @@ def spawn_sticky_process(note: PostItNote) -> bool:
 
 
 def close_sticky_process(note_id: str) -> None:
+    subprocess.run(
+        ["systemctl", "--user", "stop", f"postit-desktop-{note_id}.service"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
     subprocess.run(
         ["pkill", "-f", f"postit-desktop-{note_id}"],
         stdout=subprocess.DEVNULL,
@@ -245,6 +279,7 @@ class StickyNoteApp(App[None]):
         Binding("s", "unstick_and_close", "Unstick", show=False),
         Binding("escape", "cancel_or_save_edit", "Save/Cancel", show=False),
         Binding("ctrl+s", "save_edit", "Save", show=False),
+        Binding("m", "toggle_move_mode", "Move", show=False),
         Binding("c", "cycle_color", "Color", show=False),
         Binding("e", "toggle_edit", "Edit", show=False),
         Binding("space", "toggle_first_checkbox", "Check", show=False),
@@ -274,6 +309,7 @@ class StickyNoteApp(App[None]):
         self.editing: bool = False
 
         self._dragging: bool = False
+        self._move_locked: bool = False  # toggled by 'm' key for click-free mouse following
         self._drag_moved: bool = False
         self._drag_start_cursor: tuple[int, int] | None = None
         self._drag_start_pos: tuple[int, int] = (self.note.desktop_x, self.note.desktop_y)
@@ -298,7 +334,27 @@ class StickyNoteApp(App[None]):
     def on_mount(self) -> None:
         self.set_focus(None)
         self._refresh_note_view()
+        # 40 FPS cursor polling timer when dragging is active
+        self.set_interval(0.025, self._poll_drag)
         self.set_interval(1.2, self._check_disk_reload)
+
+    def _poll_drag(self) -> None:
+        """Polls Hyprland global cursor position at 40 FPS while dragging so the panel moves smoothly."""
+        if not self._dragging or not self._drag_start_cursor:
+            return
+        cur = get_hypr_cursor_pos()
+        if not cur:
+            return
+        dx = cur[0] - self._drag_start_cursor[0]
+        dy = cur[1] - self._drag_start_cursor[1]
+        if abs(dx) > 2 or abs(dy) > 2:
+            self._drag_moved = True
+            new_x = max(0, self._drag_start_pos[0] + dx)
+            new_y = max(0, self._drag_start_pos[1] + dy)
+            if (new_x, new_y) != (self.note.desktop_x, self.note.desktop_y):
+                self.note.desktop_x = new_x
+                self.note.desktop_y = new_y
+                move_or_resize_panel(self.note.id, x=new_x, y=new_y)
 
     def _check_disk_reload(self) -> None:
         if self.editing or self._dragging:
@@ -322,16 +378,20 @@ class StickyNoteApp(App[None]):
             self.screen.styles.background = theme.bg_card
             card = self.query_one("#sticky-card", Vertical)
             card.styles.background = theme.bg_card
-            card.styles.border = ("heavy", theme.accent)
+            border_color = "#50fa7b" if self._dragging else theme.accent
+            card.styles.border = ("heavy", border_color)
         except Exception:
             pass
 
         hdr = Text()
-        pin = "📌 " if self.note.pinned else "📝 "
-        hdr.append(f"{pin}{self.note.title}", style=f"bold {theme.accent}")
-        done, total = self.note.checklist_stats()
-        if total > 0:
-            hdr.append(f" ({done}/{total})", style="bold #50fa7b" if done == total else "#6272a4")
+        if self._dragging:
+            hdr.append("✥ SPOSTAMENTO... ", style="bold #50fa7b")
+        else:
+            pin = "📌 " if self.note.pinned else "📝 "
+            hdr.append(f"{pin}{self.note.title}", style=f"bold {theme.accent}")
+            done, total = self.note.checklist_stats()
+            if total > 0:
+                hdr.append(f" ({done}/{total})", style="bold #50fa7b" if done == total else "#6272a4")
 
         body = Text()
         cb_counter = 0
@@ -354,8 +414,10 @@ class StickyNoteApp(App[None]):
         ftr = Text()
         if self.editing:
             ftr.append("[Esc/Ctrl+S] Salva", style=f"bold {theme.accent}")
+        elif self._dragging:
+            ftr.append("Rilascia o Clicca per fissare posizione", style="bold #50fa7b")
         else:
-            ftr.append("✥ Trascina  [Spazio] ✓  [e] Modifica  [c] Colore  [s] Stacca", style="#6272a4")
+            ftr.append("✥ Trascina/[m]  [Spazio] ✓  [e] Mod  [c] Col  [s] Stacca", style="#6272a4")
 
         try:
             self.query_one("#sticky-header", Static).update(hdr)
@@ -366,49 +428,64 @@ class StickyNoteApp(App[None]):
 
     # --- Mouse Dragging & Clicking ---
 
-    def on_mouse_down(self, event: events.MouseDown) -> None:
-        if self.editing or event.button != 1:
-            return
+    def _start_dragging(self, lock_mode: bool = False) -> None:
         self._dragging = True
+        self._move_locked = lock_mode
         self._drag_moved = False
         self._drag_start_pos = (self.note.desktop_x, self.note.desktop_y)
         self._drag_start_cursor = get_hypr_cursor_pos()
         self.capture_mouse()
+        self._refresh_note_view()
 
-    def on_mouse_move(self, event: events.MouseMove) -> None:
-        if not self._dragging or not self._drag_start_cursor:
-            return
-        cur = get_hypr_cursor_pos()
-        if not cur:
-            return
-        dx = cur[0] - self._drag_start_cursor[0]
-        dy = cur[1] - self._drag_start_cursor[1]
-        if abs(dx) > 3 or abs(dy) > 3:
-            self._drag_moved = True
-            new_x = max(0, self._drag_start_pos[0] + dx)
-            new_y = max(0, self._drag_start_pos[1] + dy)
-            if (new_x, new_y) != (self.note.desktop_x, self.note.desktop_y):
-                self.note.desktop_x = new_x
-                self.note.desktop_y = new_y
-                move_or_resize_panel(self.note.id, x=new_x, y=new_y)
-
-    def on_mouse_up(self, event: events.MouseUp) -> None:
+    def _stop_dragging(self, click_y: int | None = None) -> None:
         if not self._dragging:
             return
+        was_moved = self._drag_moved
+        was_locked = self._move_locked
         self._dragging = False
+        self._move_locked = False
         self.release_mouse()
-        if self._drag_moved:
+        if was_moved or was_locked:
             self.store.save(self.note)
             self._last_mtime = self._get_file_mtime()
-        else:
-            # Clicked without dragging: check if clicked on a checkbox line in sticky-body!
-            content_row = event.screen_y - 2
+        elif click_y is not None:
+            content_row = int(click_y) - 2
             if content_row >= 0 and self.note.toggle_checkbox_at_content_line(content_row):
                 self.store.save(self.note)
                 self._last_mtime = self._get_file_mtime()
-                self._refresh_note_view()
+        self._refresh_note_view()
+
+    def on_mouse_down(self, event: events.MouseDown) -> None:
+        if self.editing or event.button != 1:
+            return
+        if self._dragging and self._move_locked:
+            self._stop_dragging()
+            return
+        self._start_dragging(lock_mode=False)
+
+    def on_mouse_move(self, event: events.MouseMove) -> None:
+        if not self._dragging:
+            return
+        # If button was released outside while moving fast (and not in 'm' lock mode), stop on re-entry
+        if not self._move_locked and event.button == 0 and self._drag_moved:
+            self._stop_dragging()
+            return
+        self._poll_drag()
+
+    def on_mouse_up(self, event: events.MouseUp) -> None:
+        if not self._dragging or self._move_locked:
+            return
+        self._stop_dragging(click_y=int(event.screen_y))
 
     # --- Actions ---
+
+    def action_toggle_move_mode(self) -> None:
+        if self.editing:
+            return
+        if self._dragging:
+            self._stop_dragging()
+        else:
+            self._start_dragging(lock_mode=True)
 
     def action_cycle_color(self) -> None:
         if self.editing:
@@ -420,6 +497,9 @@ class StickyNoteApp(App[None]):
 
     def action_toggle_first_checkbox(self) -> None:
         if self.editing:
+            return
+        if self._dragging:
+            self._stop_dragging()
             return
         if self.note.toggle_checkbox_index(-1):
             self.store.save(self.note)
@@ -494,6 +574,9 @@ class StickyNoteApp(App[None]):
         self.store.save(self.note)
 
     def action_toggle_edit(self) -> None:
+        if self._dragging:
+            self._stop_dragging()
+            return
         if self.editing:
             self.action_save_edit()
             return
@@ -531,6 +614,9 @@ class StickyNoteApp(App[None]):
         self._refresh_note_view()
 
     def action_cancel_or_save_edit(self) -> None:
+        if self._dragging:
+            self._stop_dragging()
+            return
         if self.editing:
             self.action_save_edit()
 
