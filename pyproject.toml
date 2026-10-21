@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "postit-tui"
+version = "0.1.0"
+description = "Dracula Corkboard Post-it Note Manager TUI with Hyprland Bottom-Layer Desktop Sticky Notes & Waybar Widget"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [
+    { name = "LucaPezzato", email = "luca@pezzato.dev" }
+]
+requires-python = ">=3.10"
+dependencies = [
+    "textual>=0.80.0",
+    "rich>=13.0.0",
+]
+
+[project.scripts]
+postit-tui = "postit_tui.cli:main"
