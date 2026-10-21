@@ -434,7 +434,7 @@ class StickyNoteApp(App[None]):
         self._drag_moved = False
         self._drag_start_pos = (self.note.desktop_x, self.note.desktop_y)
         self._drag_start_cursor = get_hypr_cursor_pos()
-        self.capture_mouse()
+        self.capture_mouse(self.screen)
         self._refresh_note_view()
 
     def _stop_dragging(self, click_y: int | None = None) -> None:
@@ -444,7 +444,7 @@ class StickyNoteApp(App[None]):
         was_locked = self._move_locked
         self._dragging = False
         self._move_locked = False
-        self.release_mouse()
+        self.capture_mouse(None)
         if was_moved or was_locked:
             self.store.save(self.note)
             self._last_mtime = self._get_file_mtime()
