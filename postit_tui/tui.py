@@ -27,7 +27,7 @@ class PostItCard(Static):
             self.double_click = double_click
 
     def __init__(self, note: PostItNote, selected: bool = False) -> None:
-        super().__init__(id=f"card-{note.id}", classes="postit-card")
+        super().__init__(classes="postit-card")
         self.note = note
         self.is_selected = selected
 
@@ -433,10 +433,15 @@ class PostItApp(App[None]):
 
     def _rebuild_grid(self) -> None:
         grid = self.query_one("#corkboard-grid", Grid)
-        grid.remove_children()
+        cards = list(grid.query(PostItCard))
         for idx, note in enumerate(self.notes):
-            card = PostItCard(note, selected=(idx == self.selected_idx))
-            grid.mount(card)
+            is_sel = idx == self.selected_idx
+            if idx < len(cards):
+                cards[idx].refresh_card(note=note, selected=is_sel)
+            else:
+                grid.mount(PostItCard(note, selected=is_sel))
+        for extra in cards[len(self.notes) :]:
+            extra.remove()
 
     def _update_selection_visuals(self, prev_idx: int, new_idx: int) -> None:
         grid = self.query_one("#corkboard-grid", Grid)
