@@ -581,6 +581,7 @@ class StickyNoteApp(App[None]):
             self.action_save_edit()
             return
         self.editing = True
+        self.query_one("#sticky-header", Static).styles.display = "none"
         self.query_one("#sticky-body", Static).styles.display = "none"
         t_inp = self.query_one("#edit-title", Input)
         b_inp = self.query_one("#edit-body", TextArea)
@@ -608,6 +609,7 @@ class StickyNoteApp(App[None]):
         b_inp.remove_class("visible")
         t_inp.disabled = True
         b_inp.disabled = True
+        self.query_one("#sticky-header", Static).styles.display = "block"
         self.query_one("#sticky-body", Static).styles.display = "block"
         self.editing = False
         self.set_focus(None)

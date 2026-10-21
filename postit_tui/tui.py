@@ -151,11 +151,15 @@ class PostItApp(App[None]):
     }
 
     #board-pane {
-        width: 63%;
+        width: 58%;
         height: 100%;
         border: round #44475a;
         background: #1e1f29;
         padding: 0 1;
+    }
+
+    #board-pane.editing {
+        width: 40%;
     }
 
     #corkboard-scroll {
@@ -180,17 +184,20 @@ class PostItApp(App[None]):
     }
 
     #detail-pane {
-        width: 37%;
+        width: 42%;
         height: 100%;
         border: heavy #bd93f9;
         background: #282a36;
-        padding: 1 2;
+        padding: 0 1;
+    }
+
+    #detail-pane.editing {
+        width: 60%;
     }
 
     #detail-header {
         width: 100%;
         height: auto;
-        margin-bottom: 1;
     }
 
     #detail-meta {
@@ -210,7 +217,6 @@ class PostItApp(App[None]):
     #detail-help {
         width: 100%;
         height: auto;
-        margin-top: 1;
         color: #6272a4;
     }
 
@@ -224,17 +230,21 @@ class PostItApp(App[None]):
         display: block;
     }
 
-    #edit-title-input {
+    #editor-top-row {
         width: 100%;
         height: 3;
-        margin-bottom: 1;
+        margin-bottom: 0;
+    }
+
+    #edit-title-input {
+        width: 64%;
+        height: 3;
         border: solid #f1fa8c;
     }
 
     #edit-tags-input {
-        width: 100%;
+        width: 36%;
         height: 3;
-        margin-bottom: 1;
         border: solid #8be9fd;
     }
 
@@ -320,8 +330,9 @@ class PostItApp(App[None]):
                 yield Static(id="detail-meta")
                 yield Static(id="detail-body")
                 with Vertical(id="editor-box"):
-                    yield Input(placeholder="Titolo del Post-it…", id="edit-title-input", disabled=True)
-                    yield Input(placeholder="Tag separati da virgola (es. dev, urgent)…", id="edit-tags-input", disabled=True)
+                    with Horizontal(id="editor-top-row"):
+                        yield Input(placeholder="Titolo del Post-it…", id="edit-title-input", disabled=True)
+                        yield Input(placeholder="Tag (es. dev, urgent)…", id="edit-tags-input", disabled=True)
                     yield TextArea(id="edit-content-area", disabled=True)
                 yield Static(id="detail-help")
         yield Static(id="status-bar")
@@ -603,12 +614,20 @@ class PostItApp(App[None]):
         if not note:
             return
         self.editing = True
+        self.query_one("#board-pane", Vertical).add_class("editing")
+        self.query_one("#detail-pane", Vertical).add_class("editing")
+        self.query_one("#detail-header", Static).styles.display = "none"
+        self.query_one("#detail-meta", Static).styles.display = "none"
         self.query_one("#detail-body", Static).styles.display = "none"
 
         editor_box = self.query_one("#editor-box", Vertical)
         t_inp = self.query_one("#edit-title-input", Input)
         tags_inp = self.query_one("#edit-tags-input", Input)
         c_area = self.query_one("#edit-content-area", TextArea)
+
+        t_inp.border_title = " 📌 Titolo "
+        tags_inp.border_title = " 🏷️ Tag "
+        c_area.border_title = " ☑️ Contenuto Markdown & Checklist (usa '- [ ] task') "
 
         t_inp.value = note.title
         tags_inp.value = ", ".join(note.tags)
@@ -618,9 +637,9 @@ class PostItApp(App[None]):
         tags_inp.disabled = False
         c_area.disabled = False
         editor_box.add_class("visible")
-        t_inp.focus()
+        c_area.focus()
         self._render_detail_pane()
-        self._set_status("Modalità Modifica — [Tab] passa al testo, [Ctrl+S] o [Esc] per salvare")
+        self._set_status("Modalità Modifica — [Tab/Shift+Tab] Titolo/Tag/Testo, [Ctrl+S] o [Esc] per salvare")
 
     def action_save_editor(self) -> None:
         if not self.editing:
@@ -642,6 +661,10 @@ class PostItApp(App[None]):
         t_inp.disabled = True
         tags_inp.disabled = True
         c_area.disabled = True
+        self.query_one("#board-pane", Vertical).remove_class("editing")
+        self.query_one("#detail-pane", Vertical).remove_class("editing")
+        self.query_one("#detail-header", Static).styles.display = "block"
+        self.query_one("#detail-meta", Static).styles.display = "block"
         self.query_one("#detail-body", Static).styles.display = "block"
         self.editing = False
         self.set_focus(None)
