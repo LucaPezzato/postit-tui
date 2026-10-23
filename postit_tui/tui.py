@@ -12,6 +12,7 @@ from textual.widgets import Footer, Input, Static, TextArea
 
 from .desktop import close_sticky_process, is_sticky_running, spawn_sticky_process, sync_desktop_notes
 from .models import CHECKBOX_RE, COLOR_ORDER, POSTIT_COLORS, NoteStore, PostItNote, _now_iso
+from .widgets import ChecklistTextArea
 
 
 GRID_COLS = 3
@@ -333,7 +334,7 @@ class PostItApp(App[None]):
                     with Horizontal(id="editor-top-row"):
                         yield Input(placeholder="Titolo del Post-it…", id="edit-title-input", disabled=True)
                         yield Input(placeholder="Tag (es. dev, urgent)…", id="edit-tags-input", disabled=True)
-                    yield TextArea(id="edit-content-area", disabled=True)
+                    yield ChecklistTextArea(id="edit-content-area", disabled=True)
                 yield Static(id="detail-help")
         yield Static(id="status-bar")
         yield Footer()
@@ -623,11 +624,11 @@ class PostItApp(App[None]):
         editor_box = self.query_one("#editor-box", Vertical)
         t_inp = self.query_one("#edit-title-input", Input)
         tags_inp = self.query_one("#edit-tags-input", Input)
-        c_area = self.query_one("#edit-content-area", TextArea)
+        c_area = self.query_one("#edit-content-area", ChecklistTextArea)
 
         t_inp.border_title = " 📌 Titolo "
         tags_inp.border_title = " 🏷️ Tag "
-        c_area.border_title = " ☑️ Contenuto Markdown & Checklist (usa '- [ ] task') "
+        c_area.border_title = " ☑️ Contenuto Markdown & Checklist (Invio crea '- [ ]') "
 
         t_inp.value = note.title
         tags_inp.value = ", ".join(note.tags)
@@ -648,7 +649,7 @@ class PostItApp(App[None]):
         editor_box = self.query_one("#editor-box", Vertical)
         t_inp = self.query_one("#edit-title-input", Input)
         tags_inp = self.query_one("#edit-tags-input", Input)
-        c_area = self.query_one("#edit-content-area", TextArea)
+        c_area = self.query_one("#edit-content-area", ChecklistTextArea)
 
         if note:
             note.title = t_inp.value.strip() or "Post-it"
@@ -826,7 +827,7 @@ class PostItApp(App[None]):
             else:
                 self._set_status("Filtro rimosso")
         elif event.input.id in ("edit-title-input", "edit-tags-input"):
-            self.query_one("#edit-content-area", TextArea).focus()
+            self.query_one("#edit-content-area", ChecklistTextArea).focus()
 
     def action_cycle_tag_filter(self) -> None:
         if self.editing:

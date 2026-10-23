@@ -4,14 +4,21 @@ from __future__ import annotations
 
 import datetime
 import json
+import os
 import re
+import shutil
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 
-NOTES_DIR = Path.home() / ".local" / "share" / "postit-tui" / "notes"
+NOTES_DIR = Path(
+    os.environ.get(
+        "POSTIT_NOTES_DIR",
+        Path.home() / ".local" / "share" / "postit-tui" / "notes",
+    )
+)
 
 
 @dataclass(frozen=True)
@@ -350,10 +357,28 @@ class NoteStore:
                 return n
         return None
 
+    @property
+    def backups_dir(self) -> Path:
+        return self.notes_dir.parent / "backups"
+
+    @property
+    def trash_dir(self) -> Path:
+        return self.notes_dir.parent / "trash"
+
     def save(self, note: PostItNote) -> Path:
         self.notes_dir.mkdir(parents=True, exist_ok=True)
         expected_name = f"{note.id}-{_slugify(note.title)}.md"
         target_path = self.notes_dir / expected_name
+
+        # Create automatic backup of existing file before overwriting
+        if target_path.exists():
+            try:
+                self.backups_dir.mkdir(parents=True, exist_ok=True)
+                ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                backup_name = f"{note.id}_{ts}_{_slugify(note.title)}.md"
+                shutil.copy2(target_path, self.backups_dir / backup_name)
+            except Exception:
+                pass
 
         # Remove old file if title slug changed
         if note.file_path and note.file_path.exists() and note.file_path != target_path:
@@ -377,6 +402,8 @@ class NoteStore:
         deleted = False
         for existing in self.notes_dir.glob(f"{note_id}-*.md"):
             try:
+                self.trash_dir.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(existing, self.trash_dir / existing.name)
                 existing.unlink()
                 deleted = True
             except Exception:

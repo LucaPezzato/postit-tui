@@ -18,6 +18,7 @@ from textual.containers import Vertical
 from textual.widgets import Input, Static, TextArea
 
 from .models import CHECKBOX_RE, NoteStore, PostItNote, _now_iso
+from .widgets import ChecklistTextArea
 
 
 def get_socket_path(note_id: str) -> Path:
@@ -328,7 +329,7 @@ class StickyNoteApp(App[None]):
             yield Static(id="sticky-header")
             yield Input(id="edit-title", placeholder="Titolo Post-it…", disabled=True)
             yield Static(id="sticky-body")
-            yield TextArea(id="edit-body", disabled=True)
+            yield ChecklistTextArea(id="edit-body", disabled=True)
             yield Static(id="sticky-footer")
 
     def on_mount(self) -> None:
@@ -584,7 +585,7 @@ class StickyNoteApp(App[None]):
         self.query_one("#sticky-header", Static).styles.display = "none"
         self.query_one("#sticky-body", Static).styles.display = "none"
         t_inp = self.query_one("#edit-title", Input)
-        b_inp = self.query_one("#edit-body", TextArea)
+        b_inp = self.query_one("#edit-body", ChecklistTextArea)
         t_inp.value = self.note.title
         b_inp.text = self.note.content
         t_inp.disabled = False
@@ -598,7 +599,7 @@ class StickyNoteApp(App[None]):
         if not self.editing:
             return
         t_inp = self.query_one("#edit-title", Input)
-        b_inp = self.query_one("#edit-body", TextArea)
+        b_inp = self.query_one("#edit-body", ChecklistTextArea)
         self.note.title = t_inp.value.strip() or "Post-it"
         self.note.content = b_inp.text
         self.note.updated_at = _now_iso()
