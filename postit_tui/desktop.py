@@ -119,6 +119,101 @@ def get_hypr_cursor_pos() -> tuple[int, int] | None:
         return None
 
 
+def get_hypr_monitor_size() -> tuple[int, int]:
+    """Returns usable (width, height) of the focused Hyprland monitor, or (1920, 1080) fallback."""
+    hyprctl = shutil.which("hyprctl")
+    if hyprctl:
+        try:
+            raw = subprocess.check_output([hyprctl, "monitors", "-j"], timeout=0.3).decode("utf-8")
+            monitors = json.loads(raw)
+            if isinstance(monitors, list) and monitors:
+                mon = next((m for m in monitors if m.get("focused")), monitors[0])
+                scale = float(mon.get("scale") or 1.0) or 1.0
+                w = int(float(mon.get("width", 1920)) / scale)
+                h = int(float(mon.get("height", 1080)) / scale)
+                reserved = mon.get("reserved") or [0, 0, 0, 0]
+                if len(reserved) >= 4:
+                    w -= int(reserved[0]) + int(reserved[2])
+                    h -= int(reserved[1]) + int(reserved[3])
+                return max(640, w), max(480, h)
+        except Exception:
+            pass
+    return 1920, 1080
+
+
+def _note_rect(note: PostItNote) -> tuple[int, int, int, int]:
+    return (
+        max(0, note.desktop_x),
+        max(0, note.desktop_y),
+        max(200, note.desktop_w),
+        max(160, note.desktop_h),
+    )
+
+
+def _rects_overlap(
+    ax: int, ay: int, aw: int, ah: int,
+    bx: int, by: int, bw: int, bh: int,
+    gap: int = 24,
+) -> bool:
+    return (
+        ax < bx + bw + gap
+        and ax + aw + gap > bx
+        and ay < by + bh + gap
+        and ay + ah + gap > by
+    )
+
+
+def ensure_non_overlapping_desktop_pos(
+    store: NoteStore,
+    note: PostItNote,
+    others: list[PostItNote] | None = None,
+    gap: int = 24,
+) -> bool:
+    """Adjusts note.desktop_x/y if it overlaps other desktop notes. Returns True if moved."""
+    if others is None:
+        others = [
+            n for n in store.list_notes(include_archived=False)
+            if n.on_desktop and n.id != note.id
+        ]
+    if not others:
+        return False
+
+    nx, ny, nw, nh = _note_rect(note)
+    other_rects = [_note_rect(o) for o in others]
+
+    def collides(cx: int, cy: int) -> bool:
+        return any(_rects_overlap(cx, cy, nw, nh, bx, by, bw, bh, gap=gap) for bx, by, bw, bh in other_rects)
+
+    if not collides(nx, ny):
+        return False
+
+    screen_w, screen_h = get_hypr_monitor_size()
+    start_x, start_y = 80, 70
+    max_x = max(start_x, screen_w - nw - 20)
+    max_y = max(start_y, screen_h - nh - 20)
+
+    # 1. Try neat grid slots first
+    for cy in range(start_y, max_y + 1, nh + gap):
+        for cx in range(start_x, max_x + 1, nw + gap):
+            if not collides(cx, cy):
+                note.desktop_x = cx
+                note.desktop_y = cy
+                return True
+
+    # 2. Finer scan around arbitrarily dragged notes
+    for cy in range(40, max_y + 1, 40):
+        for cx in range(40, max_x + 1, 40):
+            if not collides(cx, cy):
+                note.desktop_x = cx
+                note.desktop_y = cy
+                return True
+
+    # 3. Fallback cascade if monitor is completely packed
+    note.desktop_x = min(max_x, start_x + (len(others) % 8) * 36)
+    note.desktop_y = min(max_y, start_y + (len(others) % 8) * 36)
+    return True
+
+
 def spawn_sticky_process(note: PostItNote) -> bool:
     if is_sticky_running(note.id):
         return True
@@ -166,19 +261,41 @@ def spawn_sticky_process(note: PostItNote) -> bool:
 
     systemd_run = shutil.which("systemd-run")
     if systemd_run:
+        setenv_args: list[str] = []
+        for var in (
+            "WAYLAND_DISPLAY",
+            "HYPRLAND_INSTANCE_SIGNATURE",
+            "XDG_RUNTIME_DIR",
+            "DISPLAY",
+            "DBUS_SESSION_BUS_ADDRESS",
+            "PATH",
+        ):
+            val = os.environ.get(var)
+            if val:
+                setenv_args.append(f"--setenv={var}={val}")
         cmd = [
             systemd_run,
             "--user",
             "--collect",
             f"--unit=postit-desktop-{note.id}",
+            *setenv_args,
             *kitty_cmd,
         ]
-    else:
-        cmd = kitty_cmd
+        try:
+            res = subprocess.run(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=3,
+            )
+            if res.returncode == 0:
+                return True
+        except Exception:
+            pass
 
     try:
         subprocess.Popen(
-            cmd,
+            kitty_cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
@@ -208,13 +325,25 @@ def close_sticky_process(note_id: str) -> None:
 
 
 def sync_desktop_notes(store: NoteStore) -> int:
-    count = 0
-    for note in store.list_notes(include_archived=False):
+    notes = store.list_notes(include_archived=False)
+    desktop_notes: list[PostItNote] = []
+    for note in notes:
         if note.on_desktop:
-            if spawn_sticky_process(note):
-                count += 1
+            desktop_notes.append(note)
         elif is_sticky_running(note.id):
             close_sticky_process(note.id)
+
+    # Keep already-running desktop notes fixed, and separate any overlapping ones
+    desktop_notes.sort(key=lambda n: 0 if is_sticky_running(n.id) else 1)
+    placed: list[PostItNote] = []
+    count = 0
+    for note in desktop_notes:
+        if placed and not is_sticky_running(note.id):
+            if ensure_non_overlapping_desktop_pos(store, note, others=placed):
+                store.save(note)
+        placed.append(note)
+        if spawn_sticky_process(note):
+            count += 1
     return count
 
 

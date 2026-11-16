@@ -11,7 +11,14 @@ from typing import Sequence
 from rich.console import Console
 from rich.table import Table
 
-from .desktop import StickyNoteApp, close_sticky_process, is_sticky_running, spawn_sticky_process, sync_desktop_notes
+from .desktop import (
+    StickyNoteApp,
+    close_sticky_process,
+    ensure_non_overlapping_desktop_pos,
+    is_sticky_running,
+    spawn_sticky_process,
+    sync_desktop_notes,
+)
 from .models import COLOR_ORDER, NoteStore
 from .tui import PostItApp
 
@@ -182,6 +189,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             on_desktop=args.desktop,
         )
         if note.on_desktop:
+            ensure_non_overlapping_desktop_pos(store, note)
+            store.save(note)
             spawn_sticky_process(note)
         print(f"Creato Post-it [{note.id}] '{note.title}'")
         return 0

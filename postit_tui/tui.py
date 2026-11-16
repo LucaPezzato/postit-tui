@@ -10,7 +10,13 @@ from textual.containers import Grid, Horizontal, Vertical, VerticalScroll
 from textual.message import Message
 from textual.widgets import Footer, Input, Static, TextArea
 
-from .desktop import close_sticky_process, is_sticky_running, spawn_sticky_process, sync_desktop_notes
+from .desktop import (
+    close_sticky_process,
+    ensure_non_overlapping_desktop_pos,
+    is_sticky_running,
+    spawn_sticky_process,
+    sync_desktop_notes,
+)
 from .models import CHECKBOX_RE, COLOR_ORDER, POSTIT_COLORS, NoteStore, PostItNote, _now_iso
 from .widgets import ChecklistTextArea
 
@@ -605,9 +611,9 @@ class PostItApp(App[None]):
         self.show_archived = False
         self._load_and_render_board(keep_id=note.id)
         self._set_status(f"Creato nuovo Post-it '{note.title}' ({note.color_theme.label})")
-        self.action_edit_note()
+        self.action_edit_note(focus_title=True)
 
-    def action_edit_note(self) -> None:
+    def action_edit_note(self, focus_title: bool = False) -> None:
         if self.editing:
             self.action_save_editor()
             return
@@ -638,7 +644,11 @@ class PostItApp(App[None]):
         tags_inp.disabled = False
         c_area.disabled = False
         editor_box.add_class("visible")
-        c_area.focus()
+        if focus_title:
+            t_inp.focus()
+            t_inp.select_all()
+        else:
+            c_area.focus()
         self._render_detail_pane()
         self._set_status("Modalità Modifica — [Tab/Shift+Tab] Titolo/Tag/Testo, [Ctrl+S] o [Esc] per salvare")
 
@@ -706,6 +716,8 @@ class PostItApp(App[None]):
             return
         note.on_desktop = not note.on_desktop
         note.updated_at = _now_iso()
+        if note.on_desktop:
+            ensure_non_overlapping_desktop_pos(self.store, note)
         self.store.save(note)
         if note.on_desktop:
             ok = spawn_sticky_process(note)
